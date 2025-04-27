@@ -35,11 +35,16 @@ module.exports = {
     {
       method: "shell.run",
       params: {
+	    build: true,
+        env: {
+          USE_NINJA: 0,
+          DISTUTILS_USE_SDK: 1,
+        },
         venv: "env",                // Edit this to customize the venv folder path
         path: "app",                // Edit this to customize the path to start the shell from
         message: [
-          "uv pip install gradio accelerate",
-          "uv pip install -r requirements.txt"
+          "uv pip install gradio accelerate setuptools wheel torch-cluster -f https://data.pyg.org/whl/torch-2.1.0+cu121.html",
+          "uv pip install -r requirements.txt --no-build-isolation"
         ]
       }
     },

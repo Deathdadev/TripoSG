@@ -13,9 +13,8 @@ module.exports = {
   }, {
     method: "fs.copy",
     params: {
-      from: "app.py",
-      to: "app/app.py",
-      overwrite: true
+      src: "app.py",
+      dest: "app/app.py"
     }
   }]
 }

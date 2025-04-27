@@ -10,5 +10,12 @@ module.exports = {
       path: "app",
       message: "git pull"
     }
+  }, {
+    method: "fs.copy",
+    params: {
+      from: "app.py",
+      to: "app/app.py",
+      overwrite: true
+    }
   }]
 }

@@ -40,17 +40,6 @@ module.exports = {
         dest: "app/app.py"
       }
     },
-    // Create necessary directories
-    {
-      method: "shell.run",
-      params: {
-        path: "app",
-        message: [
-          "mkdir -p checkpoints",
-          "mkdir -p tmp"
-        ]
-      }
-    },
     // Download required model files
     {
       method: "hf.download",

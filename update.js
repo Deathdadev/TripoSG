@@ -31,17 +31,6 @@ module.exports = {
         dest: "app/app.py"
       }
     },
-    // Make sure directories exist
-    {
-      method: "shell.run",
-      params: {
-        path: "app",
-        message: [
-          "mkdir -p checkpoints",
-          "mkdir -p tmp"
-        ]
-      }
-    },
     // Update required model files
     {
       method: "hf.download",

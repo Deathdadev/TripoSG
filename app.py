@@ -494,15 +494,17 @@ with gr.Blocks(title="TripoSG") as demo:
             textured_model_output = gr.Model3D(label="Textured GLB", interactive=False)
 
     with gr.Row():
+        # Use a simpler approach for examples - just load the images without preprocessing
         examples = gr.Examples(
             examples=[
                 f"assets/example_data/{image}"
                 for image in os.listdir(f"assets/example_data")
+                if image.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))
             ],
-            fn=run_full,
             inputs=[image_prompts],
-            outputs=[seg_image, model_output, textured_model_output],
-            cache_examples=True,
+            # Don't specify outputs or function to avoid automatic processing
+            # The user will need to click "Generate Shape" after selecting an example
+            cache_examples=False,
         )
 
     gen_button.click(
@@ -535,4 +537,9 @@ with gr.Blocks(title="TripoSG") as demo:
     demo.load(start_session)
     demo.unload(end_session)
 
-demo.launch(share=False)
+demo.launch(
+    share=False,
+    cache_examples=False,  # Disable caching at the global level
+    max_threads=8,         # Limit number of threads to prevent excessive resource usage
+    show_error=True        # Show detailed error messages for debugging
+)

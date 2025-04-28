@@ -109,7 +109,13 @@ remove_bg_fn = lambda x: remove_bg(x, birefnet, transform_image, DEVICE)
 if not os.path.exists("checkpoints/RealESRGAN_x2plus.pth"):
     hf_hub_download("dtarnow/UPscaler", filename="RealESRGAN_x2plus.pth", local_dir="checkpoints")
 if not os.path.exists("checkpoints/big-lama.pt"):
-    subprocess.run("wget -P checkpoints/ https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt", shell=True, check=True)
+    import urllib.request
+    print("Downloading big-lama.pt model...")
+    urllib.request.urlretrieve(
+        "https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt",
+        "checkpoints/big-lama.pt"
+    )
+    print("Download complete.")
 
 
 def start_session(req: gr.Request):

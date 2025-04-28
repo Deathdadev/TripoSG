@@ -1,7 +1,7 @@
 const path = require('path')
 module.exports = {
   version: "3.7",
-  title: "DetailGen3D",
+  title: "TripoSG",
   description: "",
   icon: "icon.png",
   menu: async (kernel, info) => {

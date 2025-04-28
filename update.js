@@ -41,6 +41,38 @@ module.exports = {
           "mkdir -p tmp"
         ]
       }
+    },
+    // Update required model files
+    {
+      method: "hf.download",
+      params: {
+        path: "app",
+        "_": ["briaai/RMBG-1.4"],
+        "local-dir": "checkpoints/RMBG-1.4"
+      }
+    },
+    {
+      method: "hf.download",
+      params: {
+        path: "app",
+        "_": ["VAST-AI/TripoSG"],
+        "local-dir": "checkpoints/TripoSG"
+      }
+    },
+    {
+      method: "hf.download",
+      params: {
+        path: "app",
+        "_": ["dtarnow/UPscaler", "RealESRGAN_x2plus.pth"],
+        "local-dir": "checkpoints"
+      }
+    },
+    {
+      method: "fs.download",
+      params: {
+        uri: "https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt",
+        dir: "app/checkpoints"
+      }
     }
   ]
 }

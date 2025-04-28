@@ -40,6 +40,49 @@ module.exports = {
         dest: "app/app.py"
       }
     },
+    // Create necessary directories
+    {
+      method: "shell.run",
+      params: {
+        path: "app",
+        message: [
+          "mkdir -p checkpoints",
+          "mkdir -p tmp"
+        ]
+      }
+    },
+    // Download required model files
+    {
+      method: "hf.download",
+      params: {
+        path: "app",
+        "_": ["briaai/RMBG-1.4"],
+        "local-dir": "checkpoints/RMBG-1.4"
+      }
+    },
+    {
+      method: "hf.download",
+      params: {
+        path: "app",
+        "_": ["VAST-AI/TripoSG"],
+        "local-dir": "checkpoints/TripoSG"
+      }
+    },
+    {
+      method: "hf.download",
+      params: {
+        path: "app",
+        "_": ["dtarnow/UPscaler", "RealESRGAN_x2plus.pth"],
+        "local-dir": "checkpoints"
+      }
+    },
+    {
+      method: "fs.download",
+      params: {
+        uri: "https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt",
+        dir: "app/checkpoints"
+      }
+    },
     // Install dependencies
     {
       method: "shell.run",
@@ -56,20 +99,9 @@ module.exports = {
           "uv pip install -r requirements.txt --no-build-isolation",
           "uv pip install gradio pandas==2.0.3 matplotlib", // Had to specify this pandas version for some reason as gradio updated it to a version that is not compatible with the version of numpy in the requirements
           "uv pip install spandrel==0.4.1 --no-deps",
-          "uv pip install -r mv_adapter/requirements.txt",
-          "mkdir -p checkpoints"
+          "uv pip install -r mv_adapter/requirements.txt"
         ]
       }
-    },
-    // Create necessary directories
-    {
-      method: "shell.run",
-      params: {
-        path: "app",
-        message: [
-          "mkdir -p tmp"
-        ]
-      }
-    },
+    }
   ]
 }

@@ -70,11 +70,17 @@ Best results come from clean, well-lit images with clear subject isolation. Try 
 # # triposg
 from scripts.image_process import prepare_image
 from scripts.briarmbg import BriaRMBG
-snapshot_download("briaai/RMBG-1.4", local_dir=RMBG_PRETRAINED_MODEL)
+# Try to use pre-downloaded models, but download if not available
+if not os.path.exists(os.path.join(RMBG_PRETRAINED_MODEL, "model.pth")):
+    print("RMBG model not found, downloading now...")
+    snapshot_download("briaai/RMBG-1.4", local_dir=RMBG_PRETRAINED_MODEL)
 rmbg_net = BriaRMBG.from_pretrained(RMBG_PRETRAINED_MODEL).to(DEVICE)
 rmbg_net.eval()
 from triposg.pipelines.pipeline_triposg import TripoSGPipeline
-snapshot_download("VAST-AI/TripoSG", local_dir=TRIPOSG_PRETRAINED_MODEL)
+# Try to use pre-downloaded models, but download if not available
+if not os.path.exists(os.path.join(TRIPOSG_PRETRAINED_MODEL, "diffusion_pytorch_model.safetensors")):
+    print("TripoSG model not found, downloading now...")
+    snapshot_download("VAST-AI/TripoSG", local_dir=TRIPOSG_PRETRAINED_MODEL)
 triposg_pipe = TripoSGPipeline.from_pretrained(TRIPOSG_PRETRAINED_MODEL).to(DEVICE, DTYPE)
 
 # mv adapter
@@ -106,16 +112,76 @@ transform_image = transforms.Compose(
 )
 remove_bg_fn = lambda x: remove_bg(x, birefnet, transform_image, DEVICE)
 
+# Try to use pre-downloaded models, but download if not available
 if not os.path.exists("checkpoints/RealESRGAN_x2plus.pth"):
-    hf_hub_download("dtarnow/UPscaler", filename="RealESRGAN_x2plus.pth", local_dir="checkpoints")
+    print("RealESRGAN_x2plus.pth not found, downloading now...")
+    try:
+        # For Hugging Face downloads, we can use tqdm for progress display
+        from tqdm import tqdm
+
+        print("Downloading RealESRGAN_x2plus.pth from Hugging Face...")
+        with tqdm(unit='B', unit_scale=True, unit_divisor=1024, miniters=1, desc="RealESRGAN_x2plus.pth") as t:
+            # Create a callback that will update our progress bar
+            def progress_callback(progress):
+                if progress.total:
+                    t.total = progress.total
+                t.update(progress.completed - t.n)
+
+            # Download with progress tracking
+            hf_hub_download(
+                "dtarnow/UPscaler",
+                filename="RealESRGAN_x2plus.pth",
+                local_dir="checkpoints",
+                tqdm_class=lambda *args, **kwargs: progress_callback
+            )
+        print("Download complete!")
+    except Exception as e:
+        print(f"Error downloading RealESRGAN_x2plus.pth: {e}")
+        print("Trying alternative download method...")
+        # Fallback to regular download without progress tracking
+        hf_hub_download("dtarnow/UPscaler", filename="RealESRGAN_x2plus.pth", local_dir="checkpoints")
 if not os.path.exists("checkpoints/big-lama.pt"):
-    import urllib.request
-    print("Downloading big-lama.pt model...")
-    urllib.request.urlretrieve(
-        "https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt",
-        "checkpoints/big-lama.pt"
-    )
-    print("Download complete.")
+    print("big-lama.pt not found, downloading now...")
+    try:
+        import urllib.request
+        import time
+
+        # Define a progress bar callback function
+        def download_progress_hook(count, block_size, total_size):
+            global start_time
+            if count == 0:
+                global start_time
+                start_time = time.time()
+                return
+
+            duration = time.time() - start_time
+            progress_size = int(count * block_size)
+            speed = int(progress_size / (1024 * duration)) if duration > 0 else 0
+            percent = min(int(count * block_size * 100 / total_size), 100)
+
+            # Calculate progress bar width (50 characters)
+            bar_width = 50
+            filled_width = int(bar_width * percent / 100)
+            bar = '█' * filled_width + '-' * (bar_width - filled_width)
+
+            # Print progress bar
+            sys.stdout.write(f'\r|{bar}| {percent}% | {progress_size / (1024*1024):.1f} MB | {speed} KB/s')
+            sys.stdout.flush()
+
+            # Print a newline when download completes
+            if progress_size >= total_size:
+                sys.stdout.write('\n')
+
+        # Start the download with progress reporting
+        urllib.request.urlretrieve(
+            "https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt",
+            "checkpoints/big-lama.pt",
+            reporthook=download_progress_hook
+        )
+        print("\nDownload complete!")
+    except Exception as e:
+        print(f"\nError downloading big-lama.pt: {e}")
+        print("Please run the installation script or download manually.")
 
 
 def start_session(req: gr.Request):

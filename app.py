@@ -1,4 +1,5 @@
 import os
+import sys
 import gradio as gr
 import numpy as np
 import torch
@@ -10,9 +11,6 @@ from torchvision import transforms
 from huggingface_hub import hf_hub_download, snapshot_download
 import subprocess
 import shutil
-
-# install others
-subprocess.run("pip install spandrel==0.4.1 --no-deps", shell=True, check=True)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.float16
@@ -40,7 +38,8 @@ MV_ADAPTER_CODE_DIR = "./mv_adapter"
 if not os.path.exists(MV_ADAPTER_CODE_DIR):
     os.system(f"git clone {MV_ADAPTER_REPO_URL} {MV_ADAPTER_CODE_DIR}")
 
-import sys
+# Add paths to Python path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(TRIPOSG_CODE_DIR)
 sys.path.append(os.path.join(TRIPOSG_CODE_DIR, "scripts"))
 sys.path.append(MV_ADAPTER_CODE_DIR)
@@ -74,7 +73,7 @@ from scripts.briarmbg import BriaRMBG
 snapshot_download("briaai/RMBG-1.4", local_dir=RMBG_PRETRAINED_MODEL)
 rmbg_net = BriaRMBG.from_pretrained(RMBG_PRETRAINED_MODEL).to(DEVICE)
 rmbg_net.eval()
-from pipelines.pipeline_triposg import TripoSGPipeline
+from triposg.pipelines.pipeline_triposg import TripoSGPipeline
 snapshot_download("VAST-AI/TripoSG", local_dir=TRIPOSG_PRETRAINED_MODEL)
 triposg_pipe = TripoSGPipeline.from_pretrained(TRIPOSG_PRETRAINED_MODEL).to(DEVICE, DTYPE)
 

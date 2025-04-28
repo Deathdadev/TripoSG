@@ -1,6 +1,6 @@
 module.exports = {
   run: [
-    // Update the DetailGen3D repository
+    // Update the Pinokio repository
     {
       method: "shell.run",
       params: {

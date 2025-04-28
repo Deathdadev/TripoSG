@@ -539,7 +539,6 @@ with gr.Blocks(title="TripoSG") as demo:
 
 demo.launch(
     share=False,
-    cache_examples=False,  # Disable caching at the global level
     max_threads=8,         # Limit number of threads to prevent excessive resource usage
     show_error=True        # Show detailed error messages for debugging
 )

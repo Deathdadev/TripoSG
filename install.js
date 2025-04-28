@@ -54,7 +54,7 @@ module.exports = {
         message: [
           "uv pip install accelerate setuptools wheel",
           "uv pip install -r requirements.txt --no-build-isolation",
-          "uv pip install gradio pandas==2.0.3", // Had to specify this pandas version for some reason as gradio updated it to a version that is not compatible with the version of numpy in the requirements
+          "uv pip install gradio pandas==2.0.3 matplotlib", // Had to specify this pandas version for some reason as gradio updated it to a version that is not compatible with the version of numpy in the requirements
           "uv pip install spandrel==0.4.1 --no-deps",
           "uv pip install -r mv_adapter/requirements.txt",
           "mkdir -p checkpoints"

@@ -79,7 +79,7 @@ triposg_pipe = TripoSGPipeline.from_pretrained(TRIPOSG_PRETRAINED_MODEL).to(DEVI
 
 # mv adapter
 NUM_VIEWS = 6
-from mv_adapter.inference_ig2mv_sdxl import prepare_pipeline, preprocess_image, remove_bg
+from mv_adapter.scripts.inference_ig2mv_sdxl import prepare_pipeline, preprocess_image, remove_bg
 from mv_adapter.mvadapter.utils import get_orthogonal_camera, tensor_to_image, make_image_grid
 from mv_adapter.mvadapter.utils.render import NVDiffRastContextWrapper, load_mesh, render
 mv_adapter_pipe = prepare_pipeline(

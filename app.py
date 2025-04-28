@@ -1,190 +1,404 @@
 import os
-import random
-import tempfile
-from typing import Any, List, Union
-
 import gradio as gr
 import numpy as np
 import torch
-from huggingface_hub import snapshot_download
 from PIL import Image
 import trimesh
-from skimage import measure
+import random
+from transformers import AutoModelForImageSegmentation
+from torchvision import transforms
+from huggingface_hub import hf_hub_download, snapshot_download
+import subprocess
+import shutil
 
-from detailgen3d.pipelines.pipeline_detailgen3d import DetailGen3DPipeline
-from detailgen3d.inference_utils import generate_dense_grid_points
+# install others
+subprocess.run("pip install spandrel==0.4.1 --no-deps", shell=True, check=True)
 
-import sys
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-# Constants
-MAX_SEED = np.iinfo(np.int32).max
-TMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tmp")
-DTYPE = torch.bfloat16
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+DTYPE = torch.float16
 
+print("DEVICE: ", DEVICE)
 
-MARKDOWN = """
-## Generating geometry details guided by reference image with [DetailGen3D](https://detailgen3d.github.io/DetailGen3D/)
-1. Upload a detailed image of the frontal view and a coarse model. Then clik "Generate Details" to generate the refined result.
-2. If you find the generated 3D scene satisfactory, download it by clicking the "Download GLB" button.
-3. If you want the refine result to be more consistent with the image, please manually increase the CFG strength.
-"""
-EXAMPLES = [
-    [
-        "assets/image/503d193a-1b9b-4685-b05f-00ac82f93d7b.png",
-        "assets/model/503d193a-1b9b-4685-b05f-00ac82f93d7b.glb",
-        42,
-        False,
-    ],
-    [
-        "assets/image/34933195-9c2c-4271-8d31-a28bc5348b7a.png",
-        "assets/model/34933195-9c2c-4271-8d31-a28bc5348b7a.glb",
-        2131379184,
-        False,
-    ],
-    [
-        "assets/image/a5d09c66-1617-465c-aec9-431f48d9a7e1.png",
-        "assets/model/a5d09c66-1617-465c-aec9-431f48d9a7e1.glb",
-        42,
-        False,
-    ],
-    [
-        "assets/image/cb7e6c4a-b4dd-483c-9789-3d4887ee7434.png",
-        "assets/model/cb7e6c4a-b4dd-483c-9789-3d4887ee7434.glb",
-        42,
-        False,
-    ],
-    [
-        "assets/image/e799e6b4-3b47-40e0-befb-b156af8758ad.png",
-        "assets/model/e799e6b4-3b47-40e0-befb-b156af8758ad.glb",
-        42,
-        False,
-    ],
-    [
-        "assets/image/100.png",
-        "assets/model/100.glb",
-        42,
-        False,
-    ],
-]
+DEFAULT_FACE_NUMBER = 100000
+MAX_SEED = np.iinfo(np.int32).max
+MV_ADAPTER_REPO_URL = "https://github.com/huanngzh/MV-Adapter.git"
 
+RMBG_PRETRAINED_MODEL = "checkpoints/RMBG-1.4"
+TRIPOSG_PRETRAINED_MODEL = "checkpoints/TripoSG"
 
+# Create checkpoints directory if it doesn't exist
+os.makedirs("checkpoints", exist_ok=True)
+
+TMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tmp")
 os.makedirs(TMP_DIR, exist_ok=True)
 
-local_dir = "pretrained_weights/DetailGen3D"
-snapshot_download(repo_id="VAST-AI/DetailGen3D", local_dir=local_dir)
-pipeline = DetailGen3DPipeline.from_pretrained(
-    local_dir
-).to(DEVICE, dtype=DTYPE)
+# The current directory is already the TripoSG repository
+TRIPOSG_CODE_DIR = "."
+
+# Clone MV-Adapter if it doesn't exist
+MV_ADAPTER_CODE_DIR = "./mv_adapter"
+if not os.path.exists(MV_ADAPTER_CODE_DIR):
+    os.system(f"git clone {MV_ADAPTER_REPO_URL} {MV_ADAPTER_CODE_DIR}")
+
+import sys
+sys.path.append(TRIPOSG_CODE_DIR)
+sys.path.append(os.path.join(TRIPOSG_CODE_DIR, "scripts"))
+sys.path.append(MV_ADAPTER_CODE_DIR)
+sys.path.append(os.path.join(MV_ADAPTER_CODE_DIR, "scripts"))
 
 
-def load_mesh(mesh_path, num_pc=20480):
-    mesh = trimesh.load(mesh_path,force="mesh")
+HEADER = """
 
-    center = mesh.bounding_box.centroid
-    mesh.apply_translation(-center)
-    scale = max(mesh.bounding_box.extents)
-    mesh.apply_scale(1.9 / scale)
+# 🔮 Image to 3D with [TripoSG](https://github.com/VAST-AI-Research/TripoSG)
 
-    surface, face_indices = trimesh.sample.sample_surface(mesh, 1000000,)
-    normal = mesh.face_normals[face_indices]
+## State-of-the-art Open Source 3D Generation Using Large-Scale Rectified Flow Transformers
 
-    rng = np.random.default_rng()
-    ind = rng.choice(surface.shape[0], num_pc, replace=False)
-    surface = torch.FloatTensor(surface[ind])
-    normal = torch.FloatTensor(normal[ind])
-    surface = torch.cat([surface, normal], dim=-1).unsqueeze(0).cuda()
+<p style="font-size: 1.1em;">By <a href="https://www.tripo3d.ai/" style="color: #1E90FF; text-decoration: none; font-weight: bold;">Tripo</a></p>
 
-    return surface
+## 📋 Quick Start Guide:
+1. **Upload an image** (single object works best)
+2. Click **Generate Shape** to create the 3D mesh
+3. Click **Apply Texture** to add textures
+4. Use **Download GLB** to save your 3D model
+5. Adjust parameters under **Generation Settings** for fine-tuning
 
-@torch.no_grad()
-@torch.autocast(device_type=DEVICE)
-def run_detailgen3d(
-    pipeline,
-    image,
-    mesh,
-    seed,
-    num_inference_steps,
-    guidance_scale,
-):
-    surface = load_mesh(mesh)
-    # image = Image.open(image).convert("RGB")
+Best results come from clean, well-lit images with clear subject isolation. Try it now!
 
-    batch_size = 1
+<p style="font-size: 0.9em; margin-top: 10px;">Texture generation powered by <a href="https://github.com/huanngzh/MV-Adapter" style="color: #1E90FF; text-decoration: none;">MV-Adapter</a> - a versatile multi-view adapter for consistent texture generation. Try the <a href="https://huggingface.co/spaces/VAST-AI/MV-Adapter-I2MV-SDXL" style="color: #1E90FF; text-decoration: none;">MV-Adapter demo</a> for multi-view image generation.</p>
 
-    # sample query points for decoding
-    box_min = np.array([-1.005, -1.005, -1.005])
-    box_max = np.array([1.005, 1.005, 1.005])
-    sampled_points, grid_size, bbox_size = generate_dense_grid_points(
-        bbox_min=box_min, bbox_max=box_max, octree_depth=8, indexing="ij"
+"""
+
+# # triposg
+from scripts.image_process import prepare_image
+from scripts.briarmbg import BriaRMBG
+snapshot_download("briaai/RMBG-1.4", local_dir=RMBG_PRETRAINED_MODEL)
+rmbg_net = BriaRMBG.from_pretrained(RMBG_PRETRAINED_MODEL).to(DEVICE)
+rmbg_net.eval()
+from pipelines.pipeline_triposg import TripoSGPipeline
+snapshot_download("VAST-AI/TripoSG", local_dir=TRIPOSG_PRETRAINED_MODEL)
+triposg_pipe = TripoSGPipeline.from_pretrained(TRIPOSG_PRETRAINED_MODEL).to(DEVICE, DTYPE)
+
+# mv adapter
+NUM_VIEWS = 6
+from mv_adapter.inference_ig2mv_sdxl import prepare_pipeline, preprocess_image, remove_bg
+from mv_adapter.mvadapter.utils import get_orthogonal_camera, tensor_to_image, make_image_grid
+from mv_adapter.mvadapter.utils.render import NVDiffRastContextWrapper, load_mesh, render
+mv_adapter_pipe = prepare_pipeline(
+    base_model="stabilityai/stable-diffusion-xl-base-1.0",
+    vae_model="madebyollin/sdxl-vae-fp16-fix",
+    unet_model=None,
+    lora_model=None,
+    adapter_path="huanngzh/mv-adapter",
+    scheduler=None,
+    num_views=NUM_VIEWS,
+    device=DEVICE,
+    dtype=torch.float16,
+)
+birefnet = AutoModelForImageSegmentation.from_pretrained(
+        "ZhengPeng7/BiRefNet", trust_remote_code=True
     )
-    sampled_points = torch.FloatTensor(sampled_points).to(DEVICE, dtype=DTYPE)
-    sampled_points = sampled_points.unsqueeze(0).repeat(batch_size, 1, 1)
+birefnet.to(DEVICE)
+transform_image = transforms.Compose(
+    [
+        transforms.Resize((1024, 1024)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+    ]
+)
+remove_bg_fn = lambda x: remove_bg(x, birefnet, transform_image, DEVICE)
 
-    # inference pipeline
-    sample = pipeline.vae.encode(surface).latent_dist.sample()
-    occ = pipeline(image, latents=sample, sampled_points=sampled_points, guidance_scale=guidance_scale, noise_aug_level=0, num_inference_steps=num_inference_steps).samples[0]
+if not os.path.exists("checkpoints/RealESRGAN_x2plus.pth"):
+    hf_hub_download("dtarnow/UPscaler", filename="RealESRGAN_x2plus.pth", local_dir="checkpoints")
+if not os.path.exists("checkpoints/big-lama.pt"):
+    subprocess.run("wget -P checkpoints/ https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt", shell=True, check=True)
 
-    # marching cubes
-    grid_logits = occ.view(grid_size).cpu().numpy()
-    vertices, faces, normals, _ = measure.marching_cubes(
-        grid_logits, 0, method="lewiner"
-    )
-    vertices = vertices / grid_size * bbox_size + box_min
-    mesh = trimesh.Trimesh(vertices.astype(np.float32), np.ascontiguousarray(faces))
-    return mesh
 
-@torch.no_grad()
-@torch.autocast(device_type=DEVICE)
-def run_refinement(
-    rgb_image: Any,
-    mesh: Any,
-    seed: int,
-    randomize_seed: bool = False,
-    num_inference_steps: int = 50,
-    guidance_scale: float = 4.0,
-):
+def start_session(req: gr.Request):
+    save_dir = os.path.join(TMP_DIR, str(req.session_hash))
+    os.makedirs(save_dir, exist_ok=True)
+    print("start session, mkdir", save_dir)
+
+def end_session(req: gr.Request):
+    save_dir = os.path.join(TMP_DIR, str(req.session_hash))
+    shutil.rmtree(save_dir)
+
+def get_random_hex():
+    random_bytes = os.urandom(8)
+    random_hex = random_bytes.hex()
+    return random_hex
+
+def get_random_seed(randomize_seed, seed):
     if randomize_seed:
         seed = random.randint(0, MAX_SEED)
+    return seed
 
-    scene = run_detailgen3d(
-        pipeline,
-        rgb_image,
-        mesh,
-        seed,
-        num_inference_steps,
-        guidance_scale,
-    )
+def run_full(image: str, req: gr.Request):
+    seed = 0
+    num_inference_steps = 50
+    guidance_scale = 7.5
+    simplify = True
+    target_face_num = DEFAULT_FACE_NUMBER
 
-    _, tmp_path = tempfile.mkstemp(suffix=".glb", prefix="detailgen3d_", dir=TMP_DIR)
-    scene.export(tmp_path)
+    image_seg = prepare_image(image, bg_color=np.array([1.0, 1.0, 1.0]), rmbg_net=rmbg_net)
+
+    outputs = triposg_pipe(
+        image=image_seg,
+        generator=torch.Generator(device=triposg_pipe.device).manual_seed(seed),
+        num_inference_steps=num_inference_steps,
+        guidance_scale=guidance_scale
+    ).samples[0]
+    print("mesh extraction done")
+    mesh = trimesh.Trimesh(outputs[0].astype(np.float32), np.ascontiguousarray(outputs[1]))
+
+    if simplify:
+        print("start simplify")
+        from scripts.utils import simplify_mesh
+        mesh = simplify_mesh(mesh, target_face_num)
+
+    save_dir = os.path.join(TMP_DIR, "examples")
+    os.makedirs(save_dir, exist_ok=True)
+    mesh_path = os.path.join(save_dir, f"triposg_{get_random_hex()}.glb")
+    mesh.export(mesh_path)
+    print("save to ", mesh_path)
 
     torch.cuda.empty_cache()
 
-    return tmp_path, tmp_path, seed
+    height, width = 768, 768
+    # Prepare cameras
+    cameras = get_orthogonal_camera(
+        elevation_deg=[0, 0, 0, 0, 89.99, -89.99],
+        distance=[1.8] * NUM_VIEWS,
+        left=-0.55,
+        right=0.55,
+        bottom=-0.55,
+        top=0.55,
+        azimuth_deg=[x - 90 for x in [0, 90, 180, 270, 180, 180]],
+        device=DEVICE,
+    )
+    ctx = NVDiffRastContextWrapper(device=DEVICE, context_type="cuda")
 
-# Demo
-with gr.Blocks() as demo:
-    gr.Markdown(MARKDOWN)
+    mesh = load_mesh(mesh_path, rescale=True, device=DEVICE)
+    render_out = render(
+        ctx,
+        mesh,
+        cameras,
+        height=height,
+        width=width,
+        render_attr=False,
+        normal_background=0.0,
+    )
+    control_images = (
+        torch.cat(
+            [
+                (render_out.pos + 0.5).clamp(0, 1),
+                (render_out.normal / 2 + 0.5).clamp(0, 1),
+            ],
+            dim=-1,
+        )
+        .permute(0, 3, 1, 2)
+        .to(DEVICE)
+    )
+
+    image = Image.open(image)
+    image = remove_bg_fn(image)
+    image = preprocess_image(image, height, width)
+
+    pipe_kwargs = {}
+    if seed != -1 and isinstance(seed, int):
+        pipe_kwargs["generator"] = torch.Generator(device=DEVICE).manual_seed(seed)
+
+    images = mv_adapter_pipe(
+        "high quality",
+        height=height,
+        width=width,
+        num_inference_steps=15,
+        guidance_scale=3.0,
+        num_images_per_prompt=NUM_VIEWS,
+        control_image=control_images,
+        control_conditioning_scale=1.0,
+        reference_image=image,
+        reference_conditioning_scale=1.0,
+        negative_prompt="watermark, ugly, deformed, noisy, blurry, low contrast",
+        cross_attention_kwargs={"scale": 1.0},
+        **pipe_kwargs,
+    ).images
+
+    torch.cuda.empty_cache()
+
+    mv_image_path = os.path.join(save_dir, f"mv_adapter_{get_random_hex()}.png")
+    make_image_grid(images, rows=1).save(mv_image_path)
+
+    from scripts.texture import TexturePipeline, ModProcessConfig
+    texture_pipe = TexturePipeline(
+        upscaler_ckpt_path="checkpoints/RealESRGAN_x2plus.pth",
+        inpaint_ckpt_path="checkpoints/big-lama.pt",
+        device=DEVICE,
+    )
+
+    textured_glb_path = texture_pipe(
+        mesh_path=mesh_path,
+        save_dir=save_dir,
+        save_name=f"texture_mesh_{get_random_hex()}.glb",
+        uv_unwarp=True,
+        uv_size=4096,
+        rgb_path=mv_image_path,
+        rgb_process_config=ModProcessConfig(view_upscale=True, inpaint_mode="view"),
+        camera_azimuth_deg=[x - 90 for x in [0, 90, 180, 270, 180, 180]],
+    )
+
+    return image_seg, mesh_path, textured_glb_path
+
+
+@torch.no_grad()
+def run_segmentation(image: str):
+    image = prepare_image(image, bg_color=np.array([1.0, 1.0, 1.0]), rmbg_net=rmbg_net)
+    return image
+
+@torch.no_grad()
+def image_to_3d(
+    image: Image.Image,
+    seed: int,
+    num_inference_steps: int,
+    guidance_scale: float,
+    simplify: bool,
+    target_face_num: int,
+    req: gr.Request
+):
+    outputs = triposg_pipe(
+        image=image,
+        generator=torch.Generator(device=triposg_pipe.device).manual_seed(seed),
+        num_inference_steps=num_inference_steps,
+        guidance_scale=guidance_scale
+    ).samples[0]
+    print("mesh extraction done")
+    mesh = trimesh.Trimesh(outputs[0].astype(np.float32), np.ascontiguousarray(outputs[1]))
+
+    if simplify:
+        print("start simplify")
+        from scripts.utils import simplify_mesh
+        mesh = simplify_mesh(mesh, target_face_num)
+
+    save_dir = os.path.join(TMP_DIR, str(req.session_hash))
+    mesh_path = os.path.join(save_dir, f"triposg_{get_random_hex()}.glb")
+    mesh.export(mesh_path)
+    print("save to ", mesh_path)
+
+    torch.cuda.empty_cache()
+
+    return mesh_path
+
+@torch.no_grad()
+def run_texture(image: Image, mesh_path: str, seed: int, req: gr.Request):
+    height, width = 768, 768
+    # Prepare cameras
+    cameras = get_orthogonal_camera(
+        elevation_deg=[0, 0, 0, 0, 89.99, -89.99],
+        distance=[1.8] * NUM_VIEWS,
+        left=-0.55,
+        right=0.55,
+        bottom=-0.55,
+        top=0.55,
+        azimuth_deg=[x - 90 for x in [0, 90, 180, 270, 180, 180]],
+        device=DEVICE,
+    )
+    ctx = NVDiffRastContextWrapper(device=DEVICE, context_type="cuda")
+
+    mesh = load_mesh(mesh_path, rescale=True, device=DEVICE)
+    render_out = render(
+        ctx,
+        mesh,
+        cameras,
+        height=height,
+        width=width,
+        render_attr=False,
+        normal_background=0.0,
+    )
+    control_images = (
+        torch.cat(
+            [
+                (render_out.pos + 0.5).clamp(0, 1),
+                (render_out.normal / 2 + 0.5).clamp(0, 1),
+            ],
+            dim=-1,
+        )
+        .permute(0, 3, 1, 2)
+        .to(DEVICE)
+    )
+
+    image = Image.open(image)
+    image = remove_bg_fn(image)
+    image = preprocess_image(image, height, width)
+
+    pipe_kwargs = {}
+    if seed != -1 and isinstance(seed, int):
+        pipe_kwargs["generator"] = torch.Generator(device=DEVICE).manual_seed(seed)
+
+    images = mv_adapter_pipe(
+        "high quality",
+        height=height,
+        width=width,
+        num_inference_steps=15,
+        guidance_scale=3.0,
+        num_images_per_prompt=NUM_VIEWS,
+        control_image=control_images,
+        control_conditioning_scale=1.0,
+        reference_image=image,
+        reference_conditioning_scale=1.0,
+        negative_prompt="watermark, ugly, deformed, noisy, blurry, low contrast",
+        cross_attention_kwargs={"scale": 1.0},
+        **pipe_kwargs,
+    ).images
+
+    torch.cuda.empty_cache()
+
+    save_dir = os.path.join(TMP_DIR, str(req.session_hash))
+    mv_image_path = os.path.join(save_dir, f"mv_adapter_{get_random_hex()}.png")
+    make_image_grid(images, rows=1).save(mv_image_path)
+
+    from scripts.texture import TexturePipeline, ModProcessConfig
+    texture_pipe = TexturePipeline(
+        upscaler_ckpt_path="checkpoints/RealESRGAN_x2plus.pth",
+        inpaint_ckpt_path="checkpoints/big-lama.pt",
+        device=DEVICE,
+    )
+
+    textured_glb_path = texture_pipe(
+        mesh_path=mesh_path,
+        save_dir=save_dir,
+        save_name=f"texture_mesh_{get_random_hex()}.glb",
+        uv_unwarp=True,
+        uv_size=4096,
+        rgb_path=mv_image_path,
+        rgb_process_config=ModProcessConfig(view_upscale=True, inpaint_mode="view"),
+        camera_azimuth_deg=[x - 90 for x in [0, 90, 180, 270, 180, 180]],
+    )
+
+    return textured_glb_path
+
+
+with gr.Blocks(title="TripoSG") as demo:
+    gr.Markdown(HEADER)
 
     with gr.Row():
         with gr.Column():
             with gr.Row():
-                image_prompts = gr.Image(label="Example Image", type="pil")
+                image_prompts = gr.Image(label="Input Image", type="filepath")
+                seg_image = gr.Image(
+                    label="Segmentation Result", type="pil", format="png", interactive=False
+                )
 
-            with gr.Accordion("Generation Settings", open=False):
+            with gr.Accordion("Generation Settings", open=True):
                 seed = gr.Slider(
                     label="Seed",
                     minimum=0,
                     maximum=MAX_SEED,
-                    step=1,
-                    value=0,
+                    step=0,
+                    value=0
                 )
                 randomize_seed = gr.Checkbox(label="Randomize seed", value=True)
                 num_inference_steps = gr.Slider(
                     label="Number of inference steps",
-                    minimum=1,
+                    minimum=8,
                     maximum=50,
                     step=1,
                     value=50,
@@ -192,39 +406,62 @@ with gr.Blocks() as demo:
                 guidance_scale = gr.Slider(
                     label="CFG scale",
                     minimum=0.0,
-                    maximum=50.0,
+                    maximum=20.0,
                     step=0.1,
-                    value=10.0,
+                    value=7.0,
                 )
-            gen_button = gr.Button("Generate Details", variant="primary")
+
+                with gr.Row():
+                    reduce_face = gr.Checkbox(label="Simplify Mesh", value=True)
+                    target_face_num = gr.Slider(maximum=1000000, minimum=10000, value=DEFAULT_FACE_NUMBER, label="Target Face Number")
+
+                gen_button = gr.Button("Generate Shape", variant="primary")
+                gen_texture_button = gr.Button("Apply Texture", interactive=False)
 
         with gr.Column():
-            mesh = gr.Model3D(label="Input Coarse Model",camera_position=(90,90,3))
-
-            model_output = gr.Model3D(label="Generated GLB", camera_position=(90,90,3))
-            download_glb = gr.DownloadButton(label="Download GLB", interactive=False)
+            model_output = gr.Model3D(label="Generated GLB", interactive=False)
+            textured_model_output = gr.Model3D(label="Textured GLB", interactive=False)
 
     with gr.Row():
-        gr.Examples(
-            examples=EXAMPLES,
-            fn=run_refinement,
-            inputs=[image_prompts, mesh, seed, randomize_seed],
-            outputs=[model_output, download_glb, seed],
-            cache_examples=False,
+        examples = gr.Examples(
+            examples=[
+                f"assets/example_data/{image}"
+                for image in os.listdir(f"assets/example_data")
+            ],
+            fn=run_full,
+            inputs=[image_prompts],
+            outputs=[seg_image, model_output, textured_model_output],
+            cache_examples=True,
         )
 
     gen_button.click(
-        run_refinement,
+        run_segmentation,
+        inputs=[image_prompts],
+        outputs=[seg_image]
+    ).then(
+        get_random_seed,
+        inputs=[randomize_seed, seed],
+        outputs=[seed],
+    ).then(
+        image_to_3d,
         inputs=[
-            image_prompts,
-            mesh,
+            seg_image,
             seed,
-            randomize_seed,
             num_inference_steps,
             guidance_scale,
+            reduce_face,
+            target_face_num
         ],
-        outputs=[model_output, download_glb, seed],
-    ).then(lambda: gr.Button(interactive=True), outputs=[download_glb])
+        outputs=[model_output]
+    ).then(lambda: gr.Button(interactive=True), outputs=[gen_texture_button])
 
+    gen_texture_button.click(
+        run_texture,
+        inputs=[image_prompts, model_output, seed],
+        outputs=[textured_model_output]
+    )
 
-demo.launch()
+    demo.load(start_session)
+    demo.unload(end_session)
+
+demo.launch(share=False)

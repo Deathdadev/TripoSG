@@ -1,11 +1,20 @@
 module.exports = {
   run: [
-    // Edit this step to customize the git repository to use
+    // Clone the TripoSG repository
     {
       method: "shell.run",
       params: {
         message: [
           "git clone https://github.com/VAST-AI-Research/TripoSG.git app",
+        ]
+      }
+    },
+    // Clone the MV-Adapter repository
+    {
+      method: "shell.run",
+      params: {
+        message: [
+          "git clone https://github.com/huanngzh/MV-Adapter.git app/mv_adapter",
         ]
       }
     },
@@ -31,7 +40,7 @@ module.exports = {
         dest: "app/app.py"
       }
     },
-    // Edit this step with your custom install commands
+    // Install dependencies
     {
       method: "shell.run",
       params: {
@@ -45,7 +54,19 @@ module.exports = {
         message: [
           "uv pip install accelerate setuptools wheel",
           "uv pip install -r requirements.txt --no-build-isolation",
-          "uv pip install gradio pandas==2.0.3" // Had to specify this pandas version for some reason as gradio updated it to a version that is not compatible with the version of numpy in the requirements
+          "uv pip install gradio pandas==2.0.3", // Had to specify this pandas version for some reason as gradio updated it to a version that is not compatible with the version of numpy in the requirements
+          "uv pip install spandrel==0.4.1 --no-deps",
+          "mkdir -p checkpoints"
+        ]
+      }
+    },
+    // Create necessary directories
+    {
+      method: "shell.run",
+      params: {
+        path: "app",
+        message: [
+          "mkdir -p tmp"
         ]
       }
     },
